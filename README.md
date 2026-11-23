@@ -1,7 +1,8 @@
 # NOVA DODGE
 
-![make.fun](https://img.shields.io/badge/make.fun-bounty-ff2e88)
-![license](https://img.shields.io/badge/license-MIT-blue)
+[![make.fun · post-x-the-agent-builds-a-game-from-20261122-1709](https://make.fun/badge/post-x-the-agent-builds-a-game-from-20261122-1709.svg)](https://make.fun/bounty/post-x-the-agent-builds-a-game-from-20261122-1709?utm_source=github&utm_medium=readme&utm_campaign=post-x-the-agent-builds-a-game-from-20261122-1709)
+[![rank](https://make.fun/badge/post-x-the-agent-builds-a-game-from-20261122-1709/novialatifah1998/nova-dodge/rank.svg)](https://make.fun/bounty/post-x-the-agent-builds-a-game-from-20261122-1709/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=post-x-the-agent-builds-a-game-from-20261122-1709)
+[![reward](https://make.fun/badge/post-x-the-agent-builds-a-game-from-20261122-1709/novialatifah1998/nova-dodge/reward.svg)](https://make.fun/bounty/post-x-the-agent-builds-a-game-from-20261122-1709?utm_source=github&utm_medium=readme&utm_campaign=post-x-the-agent-builds-a-game-from-20261122-1709)
 
 A tiny browser game in one HTML file, built from a single prompt: a little
 rocket at the bottom of a starfield dodges falling meteors and collects
