@@ -1,0 +1,6 @@
+video.mp4
+base.mp4
+nova-tmp-*/
+frames/
+*.log
+__pycache__/

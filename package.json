@@ -1,0 +1,1 @@
+{"description":"NOVA DODGE — a tiny browser game built from one prompt, with a 30 s showcase video","engines":{"node":">=22"},"license":"MIT","name":"nova-dodge","scripts":{"render":"python3 render.py assets","start":"node main.ts"},"type":"module","version":"1.0.0"}

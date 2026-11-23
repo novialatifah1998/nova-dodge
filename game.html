@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>NOVA DODGE — one prompt, one game</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #05030f; height: 100%; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; background: #05030f; touch-action: none;
+           max-width: 100vw; max-height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="game" width="480" height="720"></canvas>
+<script>
+'use strict';
+// NOVA DODGE — a tiny browser game built from one prompt.
+// A little rocket dodges falling meteors and collects stars.
+// Arrow keys / WASD / touch-drag to move. Score +1 per star, +1 per
+// meteor dodged. 3 lives, speed ramps up with the level.
+(function () {
+  var W = 480, H = 720;
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+
+  // ---- tuning (one place, so the video renderer can mirror it) ----
+  var ROCKET_Y = 640;          // rocket baseline (nose sits a little above)
+  var ROCKET_SPEED = 340;      // px per second, horizontal
+  var ROCKET_R = 20;           // collision radius
+  var METEOR_VY0 = 140;        // base fall speed, px/s
+  var METEOR_VY_LEVEL = 14;    // extra fall speed per level
+  var STAR_VY = 95;            // stars drift down slowly
+  var METEOR_EVERY = 0.85;     // seconds between meteor spawns
+  var STAR_EVERY = 1.05;       // seconds between star spawns
+  var SPAWN_LEVEL_CUT = 0.05;  // spawn interval shrink per level (min 0.45s)
+  var INVULN_SEC = 1.5;        // seconds of blinking after a hit
+
+  var state = 'title'; // title | playing | over
+  var score = 0, lives = 3, level = 1;
+  var banner = null; // {text, t} floating announcement, e.g. LEVEL UP!
+  var rocket = { x: W / 2, y: ROCKET_Y, vx: 0 };
+  var meteors = [], stars = [], parts = [];
+  var meteorTimer = 0, starTimer = 0, invuln = 0, elapsed = 0;
+  var keys = {};
+  var bgStars = [];
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  for (var i = 0; i < 90; i++) {
+    bgStars.push({ x: Math.random() * W, y: Math.random() * H,
+                   r: rand(0.6, 2.0), tw: rand(0, Math.PI * 2),
+                   sp: rand(0.2, 1.0) });
+  }
+
+  function reset() {
+    score = 0; lives = 3; level = 1;
+    rocket.x = W / 2; rocket.vx = 0;
+    meteors = []; stars = []; parts = [];
+    meteorTimer = 0.4; starTimer = 0.2; invuln = 0; elapsed = 0;
+  }
+
+  function levelFor(s) { return 1 + Math.floor(s / 10); }
+
+  function spawnMeteor() {
+    var r = rand(14, 26);
+    meteors.push({ x: rand(r, W - r), y: -r - 4, r: r,
+                   vy: (METEOR_VY0 + METEOR_VY_LEVEL * (level - 1)) * rand(0.85, 1.2),
+                   rot: rand(0, Math.PI * 2), vr: rand(-1.2, 1.2),
+                   craters: [rand(0.2, 0.6), rand(0.2, 0.6), rand(0.2, 0.6)] });
+  }
+
+  function spawnStar() {
+    stars.push({ x: rand(24, W - 24), y: -20, r: 13,
+                 vy: STAR_VY * rand(0.9, 1.15), rot: rand(0, Math.PI * 2) });
+  }
+
+  function burst(x, y, color, n) {
+    for (var i = 0; i < n; i++) {
+      var a = rand(0, Math.PI * 2), sp = rand(40, 220);
+      parts.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                   life: rand(0.3, 0.7), max: 0.7, color: color, r: rand(2, 4) });
+    }
+  }
+
+  function hit() {
+    lives -= 1;
+    invuln = INVULN_SEC;
+    burst(rocket.x, rocket.y, '#ff5a3c', 26);
+    if (lives <= 0) {
+      state = 'over';
+      burst(rocket.x, rocket.y, '#ffb347', 40);
+    }
+  }
+
+  function update(dt) {
+    elapsed += dt;
+    if (invuln > 0) invuln -= dt;
+
+    // steering: keyboard, then touch/mouse drag target
+    var ax = 0;
+    if (keys['arrowleft'] || keys['a']) ax -= 1;
+    if (keys['arrowright'] || keys['d']) ax += 1;
+    if (ax !== 0) {
+      rocket.x += ax * ROCKET_SPEED * dt;
+      rocket.vx = ax * ROCKET_SPEED;
+    } else if (dragX !== null) {
+      var dx = dragX - rocket.x;
+      rocket.x += clamp(dx, -ROCKET_SPEED * dt, ROCKET_SPEED * dt);
+      rocket.vx = clamp(dx * 8, -ROCKET_SPEED, ROCKET_SPEED);
+    } else {
+      rocket.vx *= 0.8;
+    }
+    var up = keys['arrowup'] || keys['w'], down = keys['arrowdown'] || keys['s'];
+    if (up) rocket.y -= 200 * dt;
+    if (down) rocket.y += 200 * dt;
+    rocket.x = clamp(rocket.x, 24, W - 24);
+    rocket.y = clamp(rocket.y, H - 220, H - 60);
+
+    // spawns
+    var mEvery = Math.max(0.45, METEOR_EVERY - SPAWN_LEVEL_CUT * (level - 1));
+    var sEvery = Math.max(0.6, STAR_EVERY - 0.03 * (level - 1));
+    meteorTimer -= dt; starTimer -= dt;
+    if (meteorTimer <= 0) { spawnMeteor(); meteorTimer = mEvery * rand(0.8, 1.2); }
+    if (starTimer <= 0) { spawnStar(); starTimer = sEvery * rand(0.8, 1.2); }
+
+    // meteors
+    for (var i = meteors.length - 1; i >= 0; i--) {
+      var m = meteors[i];
+      m.y += m.vy * dt; m.rot += m.vr * dt;
+      if (m.y - m.r > H) { meteors.splice(i, 1); score += 1; continue; }
+      if (invuln <= 0) {
+        var ddx = m.x - rocket.x, ddy = m.y - rocket.y;
+        if (ddx * ddx + ddy * ddy < (m.r + ROCKET_R - 6) * (m.r + ROCKET_R - 6)) {
+          meteors.splice(i, 1);
+          hit();
+          if (state !== 'playing') return;
+        }
+      }
+    }
+    // stars
+    for (var j = stars.length - 1; j >= 0; j--) {
+      var s = stars[j];
+      s.y += s.vy * dt; s.rot += 1.5 * dt;
+      if (s.y - s.r > H) { stars.splice(j, 1); continue; }
+      var sdx = s.x - rocket.x, sdy = s.y - rocket.y;
+      if (sdx * sdx + sdy * sdy < (s.r + ROCKET_R + 6) * (s.r + ROCKET_R + 6)) {
+        stars.splice(j, 1);
+        score += 1;
+        burst(s.x, s.y, '#ffd94d', 10);
+      }
+    }
+    // particles
+    for (var k = parts.length - 1; k >= 0; k--) {
+      var p = parts[k];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      if (p.life <= 0) parts.splice(k, 1);
+    }
+    var nl = levelFor(score);
+    if (nl !== level) {
+      level = nl;
+      banner = { text: 'LEVEL UP!  ·  LVL ' + level, t: 1.4 };
+      burst(rocket.x, rocket.y - 40, '#7df9ff', 18);
+    }
+    if (banner) { banner.t -= dt; if (banner.t <= 0) banner = null; }
+  }
+
+  // ---- drawing ----
+  function drawStar4(x, y, r, rot, color) {
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, -r);
+    ctx.quadraticCurveTo(0, 0, r, 0);
+    ctx.quadraticCurveTo(0, 0, 0, r);
+    ctx.quadraticCurveTo(0, 0, -r, 0);
+    ctx.quadraticCurveTo(0, 0, 0, -r);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawRocket(x, y, t) {
+    ctx.save();
+    ctx.translate(x, y);
+    // flame
+    var fl = 14 + Math.sin(t * 40) * 6;
+    ctx.fillStyle = '#ff9a3c';
+    ctx.beginPath();
+    ctx.moveTo(-8, 14); ctx.lineTo(0, 14 + fl); ctx.lineTo(8, 14);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffe66d';
+    ctx.beginPath();
+    ctx.moveTo(-4, 14); ctx.lineTo(0, 14 + fl * 0.6); ctx.lineTo(4, 14);
+    ctx.closePath(); ctx.fill();
+    // body
+    ctx.fillStyle = '#e8ecf4';
+    ctx.beginPath();
+    ctx.moveTo(0, -26);
+    ctx.quadraticCurveTo(12, -8, 11, 12);
+    ctx.lineTo(-11, 12);
+    ctx.quadraticCurveTo(-12, -8, 0, -26);
+    ctx.fill();
+    ctx.fillStyle = '#c41c83';
+    ctx.fillRect(-11, 2, 22, 6);
+    // window
+    ctx.fillStyle = '#7df9ff';
+    ctx.beginPath(); ctx.arc(0, -6, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#0b1026';
+    ctx.beginPath(); ctx.arc(0, -6, 3.5, 0, Math.PI * 2); ctx.fill();
+    // fins
+    ctx.fillStyle = '#ff5a3c';
+    ctx.beginPath(); ctx.moveTo(-11, 6); ctx.lineTo(-20, 18); ctx.lineTo(-11, 16); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(11, 6); ctx.lineTo(20, 18); ctx.lineTo(11, 16); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawMeteor(m) {
+    ctx.save();
+    ctx.translate(m.x, m.y); ctx.rotate(m.rot);
+    ctx.fillStyle = '#8d93a5';
+    ctx.beginPath(); ctx.arc(0, 0, m.r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#6e7488';
+    ctx.beginPath(); ctx.arc(-m.r * 0.3, -m.r * 0.2, m.r * m.craters[0] * 0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(m.r * 0.35, m.r * 0.3, m.r * m.craters[1] * 0.45, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(m.r * 0.1, -m.r * 0.45, m.r * m.craters[2] * 0.4, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, m.r - 1, Math.PI * 1.1, Math.PI * 1.7); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBackground(t) {
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0b1030');
+    g.addColorStop(0.6, '#070418');
+    g.addColorStop(1, '#05030f');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    for (var i = 0; i < bgStars.length; i++) {
+      var s = bgStars[i];
+      var a = 0.35 + 0.65 * Math.abs(Math.sin(t * s.sp + s.tw));
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // faint nebula blobs
+    ctx.globalAlpha = 0.10;
+    ctx.fillStyle = '#c41c83';
+    ctx.beginPath(); ctx.arc(90, 180, 120, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#2b6cff';
+    ctx.beginPath(); ctx.arc(400, 420, 140, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHUD() {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 54px system-ui, sans-serif';
+    ctx.fillText(String(score), W / 2, 72);
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.65)';
+    ctx.fillText('SCORE', W / 2, 96);
+    // lives as hearts, top left
+    ctx.textAlign = 'left';
+    ctx.font = '28px system-ui, sans-serif';
+    for (var i = 0; i < 3; i++) {
+      ctx.fillStyle = i < lives ? '#ff5a7a' : 'rgba(255,255,255,0.18)';
+      ctx.fillText('\u2665', 18 + i * 32, 52);
+    }
+    // level, top right
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#7df9ff';
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.fillText('LVL ' + level, W - 18, 50);
+  }
+
+  function drawCenter(text, sub, y) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 52px system-ui, sans-serif';
+    ctx.fillText(text, W / 2, y);
+    if (sub) {
+      ctx.font = '20px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillText(sub, W / 2, y + 40);
+    }
+  }
+
+  function draw(t) {
+    drawBackground(t);
+    if (state === 'title') {
+      drawRocket(W / 2, 430 + Math.sin(t * 2) * 8, t);
+      drawCenter('NOVA DODGE', 'one prompt. one game.', 240);
+      ctx.textAlign = 'center';
+      ctx.font = '20px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd94d';
+      ctx.fillText('press SPACE or tap to start', W / 2, 540);
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillText('arrows / drag to fly  ·  dodge meteors  ·  grab stars', W / 2, 575);
+      return;
+    }
+    // meteors, stars, particles, rocket
+    for (var i = 0; i < meteors.length; i++) drawMeteor(meteors[i]);
+    for (var j = 0; j < stars.length; j++) {
+      drawStar4(stars[j].x, stars[j].y, stars[j].r, stars[j].rot, '#ffd94d');
+    }
+    for (var k = 0; k < parts.length; k++) {
+      var p = parts[k];
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (!(invuln > 0 && Math.floor(t * 12) % 2 === 0)) drawRocket(rocket.x, rocket.y, t);
+    drawHUD();
+    if (banner) {
+      ctx.globalAlpha = Math.min(1, banner.t);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#7df9ff';
+      ctx.font = 'bold 30px system-ui, sans-serif';
+      ctx.fillText(banner.text, W / 2, 170);
+      ctx.globalAlpha = 1;
+    }
+    if (state === 'over') {
+      ctx.fillStyle = 'rgba(5,3,15,0.72)';
+      ctx.fillRect(0, 0, W, H);
+      drawCenter('GAME OVER', 'score ' + score + '  ·  level ' + level, 320);
+      ctx.textAlign = 'center';
+      ctx.font = '20px system-ui, sans-serif';
+      ctx.fillStyle = '#ffd94d';
+      ctx.fillText('press R or tap to fly again', W / 2, 400);
+    }
+  }
+
+  // ---- input ----
+  var dragX = null;
+  window.addEventListener('keydown', function (e) {
+    var k = e.key.toLowerCase();
+    keys[k] = true;
+    if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' '].indexOf(k) >= 0) e.preventDefault();
+    if (state === 'title' && (k === ' ' || k === 'enter')) { reset(); state = 'playing'; }
+    else if (state === 'over' && (k === 'r' || k === ' ' || k === 'enter')) { reset(); state = 'playing'; }
+  });
+  window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+  function pointerPos(e) {
+    var r = canvas.getBoundingClientRect();
+    var cx = (e.touches ? e.touches[0].clientX : e.clientX);
+    return (cx - r.left) * (W / r.width);
+  }
+  canvas.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    dragX = pointerPos(e);
+    if (state === 'title' || state === 'over') { reset(); state = 'playing'; }
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (dragX !== null) { e.preventDefault(); dragX = pointerPos(e); }
+  });
+  window.addEventListener('pointerup', function () { dragX = null; });
+
+  // ---- main loop ----
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (state === 'playing') update(dt);
+    draw(now / 1000);
+    requestAnimationFrame(frame);
+  }
+  draw(0);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
